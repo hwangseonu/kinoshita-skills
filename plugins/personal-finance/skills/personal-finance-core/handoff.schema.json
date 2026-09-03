@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/asset-management-handoff.schema.json",
+  "title": "Early-career asset management handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "created_at",
+    "profile",
+    "snapshot",
+    "accounts",
+    "opening_positions",
+    "liabilities",
+    "recurring_flows",
+    "cashflow_horizon",
+    "goals",
+    "budget_policy",
+    "operations",
+    "risk_rules",
+    "onboarding_checklist",
+    "follow_ups",
+    "storage"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lifecycle_stage", "currency", "timezone"],
+      "properties": {
+        "lifecycle_stage": { "const": "early_career" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+        "timezone": { "type": "string", "minLength": 1 },
+        "household_notes": { "type": "string" },
+        "income_pattern": { "enum": ["regular", "irregular", "mixed"] }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of"],
+      "properties": { "as_of": { "type": "string", "format": "date-time" } }
+    },
+    "accounts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account_id", "label", "cash_like", "liquidity"],
+        "properties": {
+          "account_id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "cash_like": { "type": "boolean" },
+          "liquidity": { "enum": ["immediate", "restricted", "illiquid"] },
+          "restriction_note": { "type": "string" }
+        }
+      }
+    },
+    "opening_positions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["position_id", "account_id", "policy", "value"],
+        "properties": {
+          "position_id": { "type": "string", "minLength": 1 },
+          "account_id": { "type": "string", "minLength": 1 },
+          "policy": { "enum": ["available", "allocated", "restricted"] },
+          "allocation_id": { "type": ["string", "null"] },
+          "value": { "$ref": "#/$defs/measuredMoney" }
+        }
+      }
+    },
+    "liabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "liability_id",
+          "label",
+          "type",
+          "principal",
+          "accrued_interest",
+          "fees_due",
+          "overdue"
+        ],
+        "properties": {
+          "liability_id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "type": {
+            "enum": [
+              "credit_card",
+              "installment",
+              "revolving",
+              "cash_advance",
+              "card_loan",
+              "student_loan",
+              "general_debt"
+            ]
+          },
+          "principal": { "$ref": "#/$defs/measuredMoney" },
+          "accrued_interest": { "$ref": "#/$defs/measuredMoney" },
+          "fees_due": { "$ref": "#/$defs/measuredMoney" },
+          "payment_account_id": { "type": "string", "minLength": 1 },
+          "next_payment": { "$ref": "#/$defs/scheduledMoney" },
+          "annual_rate": { "type": ["number", "null"], "minimum": 0 },
+          "total_installments": { "type": ["integer", "null"], "minimum": 1 },
+          "remaining_installments": { "type": ["integer", "null"], "minimum": 0 },
+          "minimum_payment": {
+            "anyOf": [
+              { "$ref": "#/$defs/measuredMoney" },
+              { "type": "null" }
+            ]
+          },
+          "overdue": { "type": "boolean" }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": ["credit_card", "installment", "revolving", "cash_advance", "card_loan"]
+                }
+              },
+              "required": ["type"]
+            },
+            "then": { "required": ["payment_account_id", "next_payment"] }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": { "enum": ["installment", "revolving", "cash_advance", "card_loan"] }
+              },
+              "required": ["type"]
+            },
+            "then": {
+              "required": [
+                "annual_rate",
+                "total_installments",
+                "remaining_installments",
+                "minimum_payment"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "recurring_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["flow_id", "label", "direction", "amount", "schedule"],
+        "properties": {
+          "flow_id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "direction": { "enum": ["income", "expense"] },
+          "amount": { "$ref": "#/$defs/measuredMoney" },
+          "schedule": { "type": "string", "minLength": 1 },
+          "essential": { "type": "boolean" }
+        }
+      }
+    },
+    "cashflow_horizon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["next_income", "essential_obligations", "payment_capacity"],
+      "properties": {
+        "next_income": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source_label", "amount", "expected_at"],
+          "properties": {
+            "source_label": { "type": "string", "minLength": 1 },
+            "amount": { "$ref": "#/$defs/measuredMoney" },
+            "expected_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "essential_obligations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["obligation_id", "label", "amount", "due_at", "payment_account_id"],
+            "properties": {
+              "obligation_id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string", "minLength": 1 },
+              "amount": { "$ref": "#/$defs/measuredMoney" },
+              "due_at": { "type": "string", "format": "date-time" },
+              "payment_account_id": { "type": "string", "minLength": 1 },
+              "source_liability_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "payment_capacity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy_available", "required_before_next_income", "can_cover", "assessed_at"],
+          "properties": {
+            "policy_available": { "$ref": "#/$defs/measuredMoney" },
+            "required_before_next_income": { "$ref": "#/$defs/measuredMoney" },
+            "can_cover": { "type": "boolean" },
+            "assessed_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "goals": { "type": "array", "items": { "type": "object" } },
+    "budget_policy": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["protected_categories", "point_policy", "refund_period_policy"],
+      "properties": {
+        "protected_categories": { "type": "array", "items": { "type": "string" } },
+        "point_policy": { "const": "cash_centered" },
+        "refund_period_policy": { "enum": ["receipt", "source"] }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_mode", "settlement_cadence"],
+      "properties": {
+        "execution_mode": { "enum": ["direct", "automated"] },
+        "settlement_cadence": { "enum": ["every_event", "daily", "weekly", "monthly"] },
+        "notification_time": { "type": ["string", "null"] },
+        "notification_weekday": { "type": ["integer", "null"], "minimum": 1, "maximum": 7 },
+        "last_closed_period_id": { "type": ["string", "null"] }
+      }
+    },
+    "risk_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deficit_period_threshold"],
+      "properties": {
+        "deficit_period_threshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "onboarding_checklist": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "classification", "status", "note"],
+        "properties": {
+          "item_id": { "type": "string", "minLength": 1 },
+          "classification": { "enum": ["blocking", "confirmed_unknown", "follow_up"] },
+          "status": { "enum": ["complete", "documented", "pending"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "follow_ups": { "type": "array", "items": { "type": "object" } },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter"],
+      "properties": {
+        "adapter": { "enum": ["unconfigured", "outline", "notion", "markdown", "other"] },
+        "location": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "$defs": {
+    "scheduledMoney": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "due_at"],
+      "properties": {
+        "amount": { "$ref": "#/$defs/measuredMoney" },
+        "due_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "measuredMoney": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "value_kind", "observed_at", "next_review_at"],
+      "properties": {
+        "amount": { "type": "integer", "minimum": 0 },
+        "value_kind": { "enum": ["exact", "estimated", "upper_bound", "variable", "unbilled"] },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "next_review_at": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "value_kind": { "not": { "const": "exact" } } } },
+          "then": { "properties": { "next_review_at": { "type": "string" } } }
+        }
+      ]
+    }
+  }
+}

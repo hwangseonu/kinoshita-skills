@@ -1,0 +1,19 @@
+{
+  "name": "kinoshita-marketplace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-agent skill and MCP marketplace for Claude, Codex, OpenCode, and Hermes",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "kinoshita": "./bin/kinoshita.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "validate": "node ./bin/kinoshita.mjs validate",
+    "check": "npm run validate && npm test"
+  }
+}

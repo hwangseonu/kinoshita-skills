@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/asset-management-event.schema.json",
+  "title": "Asset management ledger event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "type",
+    "occurred_at",
+    "recognition_status",
+    "settlement_status",
+    "verification_status",
+    "source",
+    "payload"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 },
+    "event_group_id": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "account_transfer",
+        "fund_allocation",
+        "cash_purchase",
+        "card_purchase",
+        "installment_purchase",
+        "card_payment",
+        "debt_draw",
+        "liability_transfer",
+        "finance_charge",
+        "debt_payment",
+        "transfer_fee",
+        "refund",
+        "card_authorization_cancelled",
+        "event_cancelled",
+        "income_received",
+        "points_earned",
+        "points_used",
+        "points_expired",
+        "points_cash_out",
+        "cashback_deposit",
+        "plan_created",
+        "reservation_created",
+        "conditional_commitment_created",
+        "firm_commitment_created"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "accounting_period_id": { "type": "string", "minLength": 1 },
+    "recognition_status": {
+      "enum": ["not_applicable", "planned", "conditional", "recognized", "reversal"]
+    },
+    "settlement_status": {
+      "enum": ["not_applicable", "unsettled", "partially_settled", "settled"]
+    },
+    "verification_status": { "enum": ["pending", "confirmed", "rejected"] },
+    "supersedes_event_id": { "type": "string", "minLength": 1 },
+    "cancels_event_id": { "type": "string", "minLength": 1 },
+    "duplicate_reviewed": { "type": "boolean" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["user", "ocr", "notification", "api"] },
+        "system": { "type": "string", "minLength": 1 },
+        "external_id": { "type": "string", "minLength": 1 },
+        "fingerprint": { "type": "string" }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "not": { "required": ["cancels_event_id"] }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["card_authorization_cancelled", "event_cancelled"] }
+        },
+        "required": ["type"]
+      },
+      "then": { "required": ["cancels_event_id"] },
+      "else": { "not": { "required": ["cancels_event_id"] } }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": { "required": ["external_id"] }
+        },
+        "required": ["source"]
+      },
+      "then": {
+        "properties": {
+          "source": { "required": ["system"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "account_transfer",
+              "fund_allocation",
+              "cash_purchase",
+              "card_purchase",
+              "installment_purchase",
+              "card_payment",
+              "debt_draw",
+              "liability_transfer",
+              "finance_charge",
+              "debt_payment",
+              "transfer_fee",
+              "income_received",
+              "points_cash_out",
+              "cashback_deposit"
+            ]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "recognition_status": { "const": "recognized" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["refund", "card_authorization_cancelled", "event_cancelled"] }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "recognition_status": { "const": "reversal" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["plan_created", "reservation_created", "firm_commitment_created"] }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "recognition_status": { "const": "planned" } } }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "conditional_commitment_created" } },
+        "required": ["type"]
+      },
+      "then": { "properties": { "recognition_status": { "const": "conditional" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["points_earned", "points_used", "points_expired"] }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "recognition_status": { "const": "not_applicable" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "enum": ["card_purchase", "installment_purchase", "debt_draw", "finance_charge"] }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "settlement_status": { "const": "unsettled" } } }
+    },
+    {
+      "if": {
+        "properties": { "type": { "enum": ["card_payment", "debt_payment"] } },
+        "required": ["type"]
+      },
+      "then": {
+        "properties": {
+          "settlement_status": { "enum": ["partially_settled", "settled"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "account_transfer",
+              "fund_allocation",
+              "cash_purchase",
+              "liability_transfer",
+              "transfer_fee",
+              "refund",
+              "card_authorization_cancelled",
+              "event_cancelled",
+              "income_received",
+              "points_earned",
+              "points_used",
+              "points_expired",
+              "points_cash_out",
+              "cashback_deposit",
+              "plan_created",
+              "reservation_created",
+              "conditional_commitment_created",
+              "firm_commitment_created"
+            ]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": { "properties": { "settlement_status": { "const": "not_applicable" } } }
+    }
+  ]
+}

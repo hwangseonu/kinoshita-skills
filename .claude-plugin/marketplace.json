@@ -1,0 +1,28 @@
+{
+  "name": "kinoshita",
+  "owner": {
+    "name": "hwangseonu",
+    "url": "https://github.com/hwangseonu"
+  },
+  "description": "Cross-agent skills and tools for Claude, Codex, OpenCode, and Hermes",
+  "plugins": [
+    {
+      "name": "personal-finance",
+      "source": "./plugins/personal-finance",
+      "description": "Personal finance onboarding and ongoing management workflows",
+      "version": "1.0.0",
+      "author": {
+        "name": "hwangseonu",
+        "url": "https://github.com/hwangseonu"
+      },
+      "homepage": "https://github.com/hwangseonu/kinoshita-skills",
+      "repository": "https://github.com/hwangseonu/kinoshita-skills",
+      "license": "Apache-2.0",
+      "category": "productivity",
+      "tags": [
+        "personal-finance",
+        "korean"
+      ]
+    }
+  ]
+}

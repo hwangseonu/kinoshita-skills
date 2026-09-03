@@ -1,0 +1,38 @@
+{
+  "$schema": "./registry.schema.json",
+  "schema_version": 1,
+  "name": "kinoshita",
+  "description": "Claude, Codex, OpenCode, Hermes에서 사용할 수 있는 LLM agent 확장 마켓플레이스",
+  "repository": "https://github.com/hwangseonu/kinoshita-skills",
+  "packages": [
+    {
+      "name": "personal-finance",
+      "display_name": "개인 재무 관리",
+      "description": "초기 자산 온보딩부터 원장 기반 지속 관리까지 제공하는 스킬 모음",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "agents": [
+        "claude",
+        "codex",
+        "opencode",
+        "hermes"
+      ],
+      "skills": [
+        {
+          "name": "personal-finance-onboarding",
+          "path": "plugins/personal-finance/skills/personal-finance-onboarding",
+          "description": "Use when a Korean early-career user asks to start personal finance management, 자산관리, 초기 자산 정리, 예산 온보딩, or create a versioned handoff for ongoing management."
+        },
+        {
+          "name": "personal-finance-management",
+          "path": "plugins/personal-finance/skills/personal-finance-management",
+          "description": "Use when a user with a personal-finance handoff reports 수입·지출·카드·이체·예약·정정, requests 결산, or runs ongoing personal finance management directly or through an automated agent."
+        }
+      ],
+      "resources": [
+        "plugins/personal-finance/skills/personal-finance-core"
+      ]
+    }
+  ],
+  "mcp_servers": []
+}
