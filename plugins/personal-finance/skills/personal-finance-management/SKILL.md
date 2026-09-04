@@ -63,7 +63,8 @@ OUTLINE_COLLECTION_ID=<collection UUID>
 API token은 출력하거나 문서 데이터에 복사하지 않습니다. `OUTLINE_URL`에는 원격 환경에서 HTTPS를
 사용합니다. HTTP URL은 기본적으로 거부합니다. 운영자가 통제하는 개발망에서만 constructor의
 `allowInsecureHttp: true`를 명시할 수 있습니다. 각 연산은 전용 문서 계층과 versioned index를 스스로
-확인합니다. 연결과 권한을 미리 확인해야 할 때만 `bootstrap()`을 직접 호출합니다.
+확인합니다. 연결과 권한을 미리 확인해야 할 때만 `bootstrap()`을 직접 호출합니다. `bootstrap()`은
+필요한 문서를 만들고 현재 배치의 위치와 내용을 검증합니다.
 
 | 목적 | 연산 |
 | --- | --- |
@@ -71,6 +72,25 @@ API token은 출력하거나 문서 데이터에 복사하지 않습니다. `OUT
 | 이벤트 읽기와 append | `readEvents()`, `appendEvent(event)` |
 | 알림 기록 읽기와 append | `readNotifications()`, `appendNotification(notification)` |
 | 파생 상태 읽기와 쓰기 | `readSnapshot()`, `writeSnapshot(snapshot)` |
+
+Outline의 읽기용 `자산관리 시스템` 아래에는 `개인화된 자산관리 원칙`, `개인 자산 목록`,
+`고정 수입·지출`, `월별 수입·지출` Markdown을 둡니다. 월별 문서는 연도와 월 순서로 중첩합니다. 별도의
+`원본 JSON (기계 전용)` 아래에는 handoff, event, notification, index와 snapshot machine envelope를
+둡니다.
+
+읽기용 문서를 원본으로 해석하지 않습니다. 모든 읽기용 수치는 저장된 handoff를
+`handoffToOpening()`으로 변환하고 event index 순서대로 `projectLedger()`를 실행한 결과입니다. 저장된
+snapshot은 읽기용 문서의 입력으로 사용하지 않으며 replay로 다시 만들거나 확인할 수 있는 파생 기록으로
+취급합니다. 사람용 문서에는 사용자가 정한 계좌·부채 별칭을 표시할 수 있지만 household note, event ID와
+의미가 정의되지 않은 payload 필드는 복사하지 않습니다.
+
+월별 문서에서는 발생 수입·지출과 실제 현금흐름을 분리합니다. 카드·할부 구매는 구매월 지출에 반영하고
+카드 결제와 부채 원금 상환은 추가 지출 없이 현금 유출로만 반영합니다. 합계에는 최종 active 확정
+이벤트만 포함하고, 확인 전 거래는 별도로 표시합니다.
+
+현재 handoff schema에 없는 실제 잔액 관측, 미사용 자산 상태, 분류별 예산, 반복 항목과 실제 거래의
+연결, 원칙 변경 이력, 월 마감 감사 이력은 추정하지 않습니다. 인계 시 관측값을 현재 실제 잔액으로
+표현하거나 자유 형식 반복 일정을 임의로 계산하지 않습니다.
 
 `appendEvent()`가 `needs_duplicate_confirmation`을 반환하면 사용자 확인 없이 재등록하지 않습니다.
 `duplicate`은 기존 원본을 유지한 멱등 결과입니다. `appendNotification()`의 `already_notified`도 최초
@@ -84,6 +104,10 @@ process나 worker isolate는 직렬화되지 않으므로 collection마다 write
 이벤트를 append하기 전에는 기존 이벤트와 새 이벤트를 함께 `projectLedger`로 임시 재생하고, append가
 끝난 뒤 index 순서로 다시 읽어 snapshot을 저장합니다. 이 여러 단계는 하나의 원자적 transaction이
 아니므로 중간 실패 시 성공한 public 메서드의 결과부터 다시 읽고 다음 단계를 재시도합니다.
+handoff와 event는 전체 replay가 성공한 뒤 원본을 먼저 저장하고 읽기용 Markdown을 갱신합니다.
+Markdown 갱신이 실패했다면 온보딩을 다시 실행하거나 handoff와 opening position을 기본값으로 만들지
+않습니다. 저장된 원본과 index를 다시 읽고 같은 연산을 재시도합니다. snapshot 읽기와 쓰기는 읽기용
+현재 상태를 갱신하지 않습니다.
 
 HTTP 429 오류는 자동 재시도하지 않습니다. 오류의 `retryAfter` 또는 메시지의 `Retry-After`를 확인하고
 해당 시간이 지난 뒤 실패한 public 메서드 전체를 다시 호출합니다.
@@ -178,7 +202,10 @@ HTTP 429 오류는 자동 재시도하지 않습니다. 오류의 `retryAfter` �
 - 중복 후보와 검증 대기 이벤트
 - 다음 수입 전 필수지출 지급 가능성
 
-결산이 끝나면 마지막 완료 `period_id`와 snapshot 기준일시를 갱신합니다. 결산 전 상태를 실시간
+결산이 끝나면 handoff의 마지막 완료 `period_id`와 별도 파생 snapshot의 기준일시를 갱신합니다. handoff의
+온보딩 기준시점인 `snapshot.as_of`와 `profile.timezone`은 변경하지 않습니다. 월별 문서에서 마감 상태를
+자동 판별하려면 `period_id`를 `YYYY-MM` 형식으로 기록합니다. 현재 schema에는 마감 시각과 당시 합계를
+보존하는 필드가 없으므로 마감 후 정정을 별도 감사 이력으로 표현하지 않습니다. 결산 전 상태를 실시간
 현황이라고 표현하지 않습니다.
 
 ## 제한 지원

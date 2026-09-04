@@ -222,38 +222,118 @@ collection UUID는 설치 환경에 맞게 설정합니다. API token은 환경 
 기본적으로 HTTPS URL만 받습니다. 운영자가 통제하는 개발망에서 HTTP가 필요하면 constructor에
 `allowInsecureHttp: true`를 명시해야 합니다. API 요청은 redirect를 따라가지 않습니다.
 
-어댑터는 collection의 기존 문서를 수정하지 않고 collection 직속 전용 root를 결정적 UUIDv4로
-만듭니다. 문서 배치는 다음과 같습니다.
+어댑터는 collection ID와 문서별 ID key로 결정적 UUIDv4를 만듭니다. collection ID는 실행 환경에서
+받으며 구현에 특정 값을 넣지 않습니다. 읽기용 문서와 재생용 원본은 다음과 같이 분리합니다.
 
 ```text
-자산관리 시스템
-├── 이벤트
-│   ├── 이벤트 인덱스
-│   └── event_id별 불변 문서
-├── 알림
-│   ├── 알림 인덱스
-│   └── period_id별 불변 문서
-├── 인계 데이터
-└── 파생 상태
+자산관리 시스템 [읽기용 Markdown]
+├── 개인화된 자산관리 원칙 [읽기용 Markdown]
+├── 개인 자산 목록 [읽기용 Markdown]
+├── 고정 수입·지출 [읽기용 Markdown]
+└── 월별 수입·지출 [읽기용 Markdown]
+    └── YYYY년 [읽기용 Markdown]
+        └── YYYY년 M월 [읽기용 Markdown]
+
+원본 JSON (기계 전용) [안내 Markdown]
+└── 시스템 manifest [machine envelope]
+    ├── 이벤트 [machine envelope]
+    │   ├── 이벤트 인덱스 [machine envelope]
+    │   └── event_id별 불변 문서 [machine envelope]
+    ├── 알림 [machine envelope]
+    │   ├── 알림 인덱스 [machine envelope]
+    │   └── period_id별 불변 문서 [machine envelope]
+    ├── 인계 데이터 [machine envelope]
+    └── 파생 상태 [machine envelope]
 ```
 
-인계 데이터와 파생 상태는 root 바로 아래의 고정 문서이며 전체 본문을 `replace` 방식으로 갱신합니다.
-이벤트와 알림은 각각 `event_id`와 `period_id`로 문서 ID를 결정하며 생성 후 갱신하지 않습니다. 같은
-이벤트 ID에 다른 내용이 있으면 충돌로 처리합니다. 같은 알림 기간을 다시 등록하면 최초 기록을
-반환합니다.
+고정 문서의 ID key와 부모는 다음과 같습니다. 기존 기계 문서의 ID key는 변경하지 않습니다.
+
+| 문서 | ID key | 부모 |
+| --- | --- | --- |
+| 자산관리 시스템 | `view:root` | collection root |
+| 개인화된 자산관리 원칙 | `view:handoff` | `view:root` |
+| 개인 자산 목록 | `view:current-state` | `view:root` |
+| 고정 수입·지출 | `view:recurring-flows` | `view:root` |
+| 월별 수입·지출 | `view:monthly` | `view:root` |
+| 연도별 요약 | `view:year:<YYYY>` | `view:monthly` |
+| 월별 상세 | `view:month:<YYYY-MM>` | 해당 연도별 요약 |
+| 원본 JSON (기계 전용) | `raw:root` | collection root |
+| 시스템 manifest | `root` | `raw:root` |
+| 이벤트 | `container:events` | `root` |
+| 이벤트 인덱스 | `index:events` | `container:events` |
+| 알림 | `container:notifications` | `root` |
+| 알림 인덱스 | `index:notifications` | `container:notifications` |
+| 인계 데이터 | `fixed:handoff` | `root` |
+| 파생 상태 | `fixed:snapshot` | `root` |
+
+이벤트 문서의 ID key는 `event:<event_id>`, 알림 문서의 ID key는
+`notification:<period_id>`입니다. 결정적 ID 입력은
+`asset-management:outline\0<소문자 collection ID>\0<ID key>`이며 SHA-256 앞 16바이트를 UUIDv4 형태로
+만듭니다. 별도 이전 작업은 이 표에 있는 ID와 부모를 그대로 사용해야 합니다.
+
+인계 데이터와 파생 상태는 시스템 manifest 바로 아래의 고정 원본 문서이며 전체 본문을 `replace`
+방식으로 갱신합니다. 이벤트와 알림은 각각 `event_id`와 `period_id`로 문서 ID를 결정하며 생성 후
+갱신하지 않습니다. 같은 이벤트 ID에 다른 내용이 있으면 충돌로 처리합니다. 같은 알림 기간을 다시
+등록하면 최초 기록을 반환합니다.
+
+읽기용 문서는 원본이 아니며 replay나 멱등 판단에 사용하지 않습니다. 모든 읽기용 수치는 검증된
+handoff를 `handoffToOpening(handoff)`으로 변환하고 이벤트 인덱스 순서의 원본 이벤트를
+`projectLedger`로 다시 계산해 만듭니다. 저장된 snapshot의 합계나 이벤트 ID를 읽기용 문서의 입력으로
+사용하지 않습니다. snapshot은 원본 replay와 대조하거나 다시 만들 수 있는 파생 기록으로만
+보존합니다.
+
+개인화된 자산관리 원칙에는 현재 handoff에 구조화된 보호 분류, 포인트, 환불 귀속, 적자 위험 기준을
+표시합니다. 개인 자산 목록에는 사용자가 정한 계좌·부채 별칭과 원장 계산값을 표시할 수 있습니다.
+household note, event ID와 의미가 정의되지 않은 임의 payload 필드는 읽기용 문서에 복사하지 않습니다.
+
+월별 문서는 확정 이벤트의 발생일을 기준으로 거래를 날짜순으로 표시합니다. 같은 발생시각에는 이벤트
+인덱스 순서를 사용합니다. 발생 수입·지출과 현금흐름을 분리하며 카드·할부 구매는 지출에만, 카드 결제와
+부채 원금 상환은 현금 유출에만 반영합니다. 환불 지출의 귀속 기간은
+`budget_policy.refund_period_policy`를 따릅니다. 합계에는 최종 active 확정 이벤트만 반영하고, 대체되거나
+취소된 확정 이벤트는 거래 이력을 설명하기 위해 상태와 함께 표시할 수 있습니다. `pending` 이벤트는
+합계에서 제외하고 확인이 필요한 항목으로 표시합니다.
+
+`schema_version=1.0.0`에는 운영 중 실제 잔액 관측, 계좌·카드 사용 상태, 분류별 예산, 구조화된 반복
+규칙과 실제 거래 연결, 원칙 변경 이력, 월 마감 시각과 당시 수치가 없습니다. 어댑터는 이 값을
+추정하지 않습니다. 인계 시 관측값은 현재 실제 잔액으로 표현하지 않고, 자유 형식 반복 일정은 월별
+예정표로 변환하지 않으며, `last_closed_period_id`가 `YYYY-MM` 형식일 때만 월 마감 포인터로 사용합니다.
+첫 저장 후 handoff의 `profile.timezone`과 `snapshot.as_of`는 읽기용 월 문서의 기간 정체성을 보존하기
+위해 변경하지 않습니다. 운영 중 파생 상태의 기준일시는 handoff를 덮어쓰지 않고 별도 snapshot에
+저장합니다.
+
+읽기용 Markdown을 비교할 때는 Outline이 손실 없이 바꾸는 형식만 정규화합니다. 한 목록에서 `- `가
+`* `로 일관되게 바뀐 표기, 같은 문단의 인접한 일반 문장 결합, 표 셀 가장자리 공백, 정렬 colon을
+유지한 separator dash 길이, 숫자 부호 바로 앞과 범위 구분용 물결표(` ~ `) 앞에 추가된 escape를 같은
+형식으로 봅니다. renderer는 단어 안
+underscore처럼 Markdown 해석에 영향을 주지 않는 문자를 불필요하게 escape하지 않습니다. heading,
+문장, 표의 data row와 값 및 부호는 그대로 비교합니다. 이 비교는 읽기용 문서에만 적용하며 machine
+envelope의 canonical JSON과 digest 검증은 완화하지 않습니다.
+
+`writeHandoff()`와 성공한 `appendEvent()`는 전체 replay를 먼저 검증하고 기계 전용 원본을 저장한 뒤
+읽기용 문서를 갱신합니다. 읽기용 문서 갱신이 실패해도 먼저 완료된 원본 저장은 되돌리지 않습니다.
+호출자는 원본을 다시 읽고 같은 public 메서드를 재시도해야 합니다. `writeSnapshot()`은 파생 snapshot
+원본만 저장하며 읽기용 문서를 snapshot에서 만들지 않습니다. `bootstrap()`은 저장된 handoff와 event
+index를 검증하고 replay한 결과로 읽기용 문서를 갱신하며, 저장된 snapshot이 있으면 envelope와 금지
+필드를 검증합니다. 검증된 handoff가 없으면 `appendEvent()`는 원본을 저장하지 않습니다. 일반 read
+메서드는 읽기용 문서를 갱신하지 않습니다.
 
 이벤트와 알림 인덱스는 각각 해당 container의 mutable direct child입니다. 인덱스 데이터는
 `index_version=1`과 `sequence`, `document_id`, 논리 key가 있는 entry 배열을 저장합니다. entry 배열의
 순서가 append 순서이며, 이벤트와 알림은 이 순서로 반환합니다. `createdAt`과 `documents.list` 결과
 순서는 replay 순서를 결정하지 않습니다.
 
-각 문서 본문은 kind, version, 논리 key, data와 SHA-256 digest가 들어 있는 canonical JSON code
-fence입니다. 어댑터는 문서 ID, collection, parent, 게시 상태와 envelope를 모두 검증합니다. 인덱스에
-있는 각 문서는 `documents.info`로 다시 읽으며, 동시에 보내는 조회는 최대 4개입니다. container의
-direct child는 100개 단위로 모두 나열한 뒤 인덱스 ID 집합과 대조합니다. 인덱스 문서나 불변 문서가
-이동된 경우, 인덱스 entry에 있는 불변 문서가 없거나 이동·삭제된 경우, 인덱스에 없는 orphan이 있는
-경우에는 읽기를 실패합니다. 삭제된 인덱스를 빈 문서로 다시 만들더라도 기존 child를 자동 편입하지
+기계 전용 각 문서 본문은 kind, version, 논리 key, data와 SHA-256 digest가 들어 있는 canonical JSON
+code fence입니다. event와 handoff의 schema ID인
+`https://example.com/schemas/asset-management-event.schema.json`과
+`https://example.com/schemas/asset-management-handoff.schema.json`, 기존 `asset-management-*` kind는
+데이터 계약 호환성을 위해 유지합니다. 읽기용 문서와 두 안내 root는 machine envelope를 사용하지
 않습니다.
+
+어댑터는 문서 ID, collection, parent, 게시 상태와 machine envelope를 모두 검증합니다. 인덱스에 있는
+각 문서는 `documents.info`로 다시 읽으며, 동시에 보내는 조회는 최대 4개입니다. container의 direct
+child는 100개 단위로 모두 나열한 뒤 인덱스 ID 집합과 대조합니다. 인덱스 문서나 불변 문서가 이동된
+경우, 인덱스 entry에 있는 불변 문서가 없거나 이동·삭제된 경우, 인덱스에 없는 orphan이 있는 경우에는
+읽기를 실패합니다. 삭제된 인덱스를 빈 문서로 다시 만들더라도 기존 child를 자동 편입하지 않습니다.
 
 불변 문서를 먼저 만들고 인덱스 entry 갱신이 끝난 시점을 append commit으로 봅니다. 문서 생성 결과가
 불명확하면 결정적 문서 ID를 다시 읽어 입력과 같은 문서인지 확인한 뒤 인덱스를 갱신합니다. 인덱스

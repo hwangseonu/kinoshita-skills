@@ -77,7 +77,9 @@ description: Use when a Korean early-career user asks to start personal finance 
 ### 4. 소득과 반복 의무
 
 정기 급여, 불규칙 소득, 지원금의 금액 범위와 입금 시점을 확인합니다. 월세, 공과금, 통신비, 보험,
-가족 부양비, 구독, 교통비처럼 반복되는 의무는 금액, 지급일, 결제수단, 필수 여부를 기록합니다.
+가족 부양비, 구독, 교통비처럼 고정되거나 소폭 변동하면서 반복되는 의무는 금액, 자유 형식 일정, 필수
+여부를 `recurring_flows`에 기록합니다. 현재 schema에 없는 결제수단, 적용 기간, 구조화된 반복 규칙은
+임의 필드로 추가하지 않습니다.
 
 아직 청구되지 않은 공과금은 임의의 확정값을 만들지 않습니다. 상한이나 변동 기준과
 `next_review_at`을 기록합니다.
@@ -104,7 +106,8 @@ description: Use when a Korean early-career user asks to start personal finance 
 
 Outline, Notion, 로컬 Markdown 또는 다른 저장소 중 사용 환경을 기록합니다. 지원 어댑터가 아직
 없으면 `storage.adapter=unconfigured`로 두고 표준 JSON을 결과로 제공합니다. 인증정보는 저장소 위치와
-분리합니다.
+분리합니다. 이미 검증된 handoff가 저장되어 있으면 온보딩을 다시 실행하거나 opening position을
+기본값으로 바꾸지 않습니다.
 
 ### 8. 위험 확인
 
@@ -140,6 +143,11 @@ Outline, Notion, 로컬 Markdown 또는 다른 저장소 중 사용 환경을 �
 `handoff.schema.json`을 따르는 `schema_version=1.0.0` JSON과 사람이 읽을 수 있는 요약을 만듭니다.
 요약에는 snapshot 기준일시, 총자산, 총부채, 순자산, 정책상 사용 가능액, 다음 수입 전 필수지출,
 목적성 자금, 결산 주기, 후속 확인을 포함합니다.
+
+Outline을 선택하면 검증된 JSON은 기계 전용 원본 문서에 저장합니다. 읽기용 `자산관리 시스템` 아래에는
+`개인화된 자산관리 원칙`, `개인 자산 목록`, `고정 수입·지출`, `월별 수입·지출` 문서를 만듭니다. 읽기용
+문서를 handoff 원본으로 사용하지 않습니다. 인계 시 관측값은 현재 실제 잔액으로 표현하지 않으며,
+schema에 없는 미사용 상태, 분류별 예산, 원칙 이력과 반복 항목의 실제 결제 연결을 추정하지 않습니다.
 
 이 `SKILL.md`가 있는 디렉터리에서 인계 JSON을 만든 뒤 다음 명령으로 검증합니다.
 
