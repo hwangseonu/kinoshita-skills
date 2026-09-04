@@ -6,6 +6,7 @@ const LIQUIDITIES = new Set(["immediate", "restricted", "illiquid"])
 const POLICIES = new Set(["available", "allocated", "restricted"])
 const INCOME_KINDS = new Set(["earned", "other"])
 const REFUNDABLE_EVENT_TYPES = new Set(["cash_purchase", "card_purchase", "installment_purchase"])
+const EXPENSE_PURCHASE_TYPES = new Set(["cash_purchase", "card_purchase"])
 
 const REQUIRED_PAYLOAD_FIELDS = {
   account_transfer: ["from_position_id", "to_position_id", "amount"],
@@ -389,12 +390,21 @@ function applyEvent(currentState, event, eventsById, options) {
       decreasePosition(state, payload.position_id, payload.amount)
       addExpense(state, payload.amount, periodId)
       break
-    case "card_purchase":
-    case "installment_purchase":
+    case "card_purchase": {
       assertMoney(payload.amount, "payload.amount")
-      getLiability(state, payload.liability_id).principal += payload.amount
+      const liability = getLiability(state, payload.liability_id)
+      if (liability.type !== "credit_card") throw new Error("card purchase requires a credit card liability")
+      liability.principal += payload.amount
       addExpense(state, payload.amount, periodId)
       break
+    }
+    case "installment_purchase": {
+      assertMoney(payload.amount, "payload.amount")
+      const liability = getLiability(state, payload.liability_id)
+      if (liability.type !== "installment") throw new Error("installment purchase requires an installment liability")
+      liability.principal += payload.amount
+      break
+    }
     case "card_payment":
       decreasePosition(state, payload.position_id, payload.amount)
       decreaseLiabilityComponent(getLiability(state, payload.liability_id), "principal", payload.amount)
@@ -461,7 +471,7 @@ function applyEvent(currentState, event, eventsById, options) {
       const refundPeriod = options.refund_period_policy === "source"
         ? sourceEvent.accounting_period_id
         : periodId
-      addExpense(state, -payload.amount, refundPeriod)
+      if (EXPENSE_PURCHASE_TYPES.has(sourceEvent.type)) addExpense(state, -payload.amount, refundPeriod)
       setOwn(state.refunded_by_source, payload.source_event_id, refunded + payload.amount)
       break
     }

@@ -59,6 +59,7 @@ description: Use when a Korean early-career user asks to start personal finance 
 카드론, 학자금과 일반 부채는 다음 내용을 확인합니다.
 
 - 현재 원금
+- 다음 분할금
 - 미지급 이자와 수수료
 - 전체 회차와 남은 회차
 - 금리와 최소 결제액
@@ -70,6 +71,10 @@ description: Use when a Korean early-career user asks to start personal finance 
 모든 부채는 `accrued_interest`, `fees_due`, `overdue`를 기록합니다. 할부·리볼빙·현금서비스·카드론의
 `annual_rate`, `total_installments`, `remaining_installments`, `minimum_payment`는 항상 키를 보존하고,
 적용되지 않는 값은 `null`로 명시합니다. 별도의 `next_due_at`은 사용하지 않습니다.
+
+할부의 남은 상환 원금은 `principal`, 다음 분할금은 `next_payment.amount`에 분리해 기록합니다. 할부를
+`recurring_flows`에 다시 넣지 않습니다. 다음 분할금은 고정 지출 문서에 표시하지만 남은 원금과 납부
+원금은 월 소비로 기록하지 않습니다.
 
 신규 사용을 권하지 않는 원칙과 기존 의무 추적을 구분합니다. 현재 부채와 다음 지급 가능성을 계산할
 수 없으면 온보딩을 완료하지 않습니다.
@@ -145,9 +150,9 @@ Outline, Notion, 로컬 Markdown 또는 다른 저장소 중 사용 환경을 �
 목적성 자금, 결산 주기, 후속 확인을 포함합니다.
 
 Outline을 선택하면 검증된 JSON은 기계 전용 원본 문서에 저장합니다. 읽기용 `자산관리 시스템` 아래에는
-`개인화된 자산관리 원칙`, `개인 자산 목록`, `고정 수입·지출`, `월별 수입·지출` 문서를 만듭니다. 읽기용
-문서를 handoff 원본으로 사용하지 않습니다. 인계 시 관측값은 현재 실제 잔액으로 표현하지 않으며,
-schema에 없는 미사용 상태, 분류별 예산, 원칙 이력과 반복 항목의 실제 결제 연결을 추정하지 않습니다.
+`개인 자산 목록`, `고정 수입·지출`, `월별 수입·지출` 문서를 만듭니다. 읽기용 문서에는 금액, 일정,
+상태와 거래 결과만 표시하고 관리 원칙, 계산 방법, schema와 replay 설명은 넣지 않습니다. 읽기용 문서를
+handoff 원본으로 사용하지 않습니다.
 
 이 `SKILL.md`가 있는 디렉터리에서 인계 JSON을 만든 뒤 다음 명령으로 검증합니다.
 

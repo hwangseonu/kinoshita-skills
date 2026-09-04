@@ -120,7 +120,7 @@ class FakeOutline {
     }
 
     const infoRequest = endpoint === "documents.info"
-    const mutationRequest = new Set(["documents.create", "documents.update"]).has(endpoint)
+    const mutationRequest = new Set(["documents.archive", "documents.create", "documents.update"]).has(endpoint)
     if (infoRequest) {
       this.#activeInfo += 1
       this.maxInfoConcurrency = Math.max(this.maxInfoConcurrency, this.#activeInfo)
@@ -184,6 +184,21 @@ class FakeOutline {
           text: normalizeOutlineMarkdown(payload.text),
           title: payload.title,
         })
+        if (this.#take(this.#ambiguous, endpoint)) throw new Error("connection closed")
+        return response(200, { data: document, ok: true })
+      }
+      case "documents.archive": {
+        assertPayloadKeys(payload, ["id"])
+        const document = this.documents.get(payload.id)
+        if (!document) return response(404, { message: "Resource not found", ok: false }, "Not Found")
+        const pending = [document]
+        while (pending.length > 0) {
+          const archived = pending.pop()
+          archived.archivedAt = this.#createdAt()
+          pending.push(...[...this.documents.values()].filter((candidate) => {
+            return candidate.parentDocumentId === archived.id && candidate.archivedAt == null
+          }))
+        }
         if (this.#take(this.#ambiguous, endpoint)) throw new Error("connection closed")
         return response(200, { data: document, ok: true })
       }
@@ -588,10 +603,10 @@ test("constructor는 env fallback과 명시적 HTTP opt-in을 지원하고 crede
 test("bootstrap은 전용 계층을 멱등 생성하고 위치 충돌을 거부한다", async () => {
   const { adapter, fake } = createAdapter()
   const ids = await adapter.bootstrap()
-  assert.equal(fake.count("documents.create"), 11)
+  assert.equal(fake.count("documents.create"), 10)
   const updatesAfterFirstBootstrap = fake.count("documents.update")
   await adapter.bootstrap()
-  assert.equal(fake.count("documents.create"), 11)
+  assert.equal(fake.count("documents.create"), 10)
   assert.equal(fake.count("documents.update"), updatesAfterFirstBootstrap)
   for (const id of Object.values(ids)) {
     assert.match(id, /^[0-9a-f-]{36}$/)
@@ -608,12 +623,11 @@ test("bootstrap은 전용 계층을 멱등 생성하고 위치 충돌을 거부�
   assert.equal(fake.documents.get(ids.overview).title, "자산관리 시스템")
   assert.match(fake.documents.get(ids.overview).text, /^# 자산관리 시스템\n/)
   assert.doesNotMatch(fake.documents.get(ids.overview).text, /```json/)
-  assert.equal(ids.principles, deterministicOutlineDocumentId(COLLECTION_ID, "view:handoff"))
   assert.equal(ids.assets, deterministicOutlineDocumentId(COLLECTION_ID, "view:current-state"))
-  for (const id of [ids.principles, ids.assets, ids.recurringFlows, ids.monthly]) {
+  assert.equal(Object.hasOwn(ids, "principles"), false)
+  for (const id of [ids.assets, ids.recurringFlows, ids.monthly]) {
     assert.equal(fake.documents.get(id).parentDocumentId, ids.overview)
   }
-  assert.match(fake.documents.get(ids.principles).text, /^# 개인화된 자산관리 원칙\n/)
   assert.match(fake.documents.get(ids.assets).text, /^# 개인 자산 목록\n/)
   assert.match(fake.documents.get(ids.recurringFlows).text, /^# 고정 수입·지출\n/)
   assert.match(fake.documents.get(ids.monthly).text, /^# 월별 수입·지출\n/)
@@ -621,6 +635,51 @@ test("bootstrap은 전용 계층을 멱등 생성하고 위치 충돌을 거부�
   assert.equal(fake.documents.get(ids.notifications).parentDocumentId, ids.root)
   assert.equal(fake.documents.get(ids.eventIndex).parentDocumentId, ids.events)
   assert.equal(fake.documents.get(ids.notificationIndex).parentDocumentId, ids.notifications)
+
+  const retiredPrinciplesId = deterministicOutlineDocumentId(COLLECTION_ID, "view:handoff")
+  fake.documents.set(retiredPrinciplesId, {
+    archivedAt: null,
+    collectionId: COLLECTION_ID,
+    createdAt: "2099-01-15T00:00:00.000Z",
+    id: retiredPrinciplesId,
+    parentDocumentId: ids.overview,
+    publishedAt: "2099-01-15T00:00:00.000Z",
+    text: "# 개인화된 자산관리 원칙",
+    title: "개인화된 자산관리 원칙",
+  })
+  fake.ambiguousOnce("documents.archive")
+  await adapter.bootstrap()
+  assert.notEqual(fake.documents.get(retiredPrinciplesId).archivedAt, null)
+  const archivesAfterRetirement = fake.count("documents.archive")
+  await adapter.bootstrap()
+  assert.equal(fake.count("documents.archive"), archivesAfterRetirement)
+
+  const nestedRetirement = createAdapter()
+  const nestedIds = await nestedRetirement.adapter.bootstrap()
+  const nestedRetiredId = deterministicOutlineDocumentId(COLLECTION_ID, "view:handoff")
+  nestedRetirement.fake.documents.set(nestedRetiredId, {
+    archivedAt: null,
+    collectionId: COLLECTION_ID,
+    createdAt: "2099-01-15T00:00:00.000Z",
+    id: nestedRetiredId,
+    parentDocumentId: nestedIds.overview,
+    publishedAt: "2099-01-15T00:00:00.000Z",
+    text: "# 개인화된 자산관리 원칙",
+    title: "개인화된 자산관리 원칙",
+  })
+  nestedRetirement.fake.documents.set("11111111-1111-4111-8111-111111111111", {
+    archivedAt: null,
+    collectionId: COLLECTION_ID,
+    createdAt: "2099-01-15T00:00:00.001Z",
+    id: "11111111-1111-4111-8111-111111111111",
+    parentDocumentId: nestedRetiredId,
+    publishedAt: "2099-01-15T00:00:00.001Z",
+    text: "# 사용자 문서",
+    title: "사용자 문서",
+  })
+  await assert.rejects(nestedRetirement.adapter.bootstrap(), /has active child documents/)
+  assert.equal(nestedRetirement.fake.documents.get(nestedRetiredId).archivedAt, null)
+  assert.equal(nestedRetirement.fake.documents.get("11111111-1111-4111-8111-111111111111").archivedAt, null)
 
   fake.documents.get(ids.root).parentDocumentId = null
   await assert.rejects(adapter.bootstrap(), /unexpected parent/)
@@ -673,22 +732,23 @@ test("handoff는 validation 후 고정 문서로 round trip하고 입력을 변�
   const rawUpdates = changedCalls.filter((call) => {
     return call.endpoint === "documents.update" && call.payload.id === adapter.documentIds.handoff
   })
-  const principleUpdates = changedCalls.filter((call) => {
-    return call.endpoint === "documents.update" && call.payload.id === adapter.documentIds.principles
+  const presentationIds = new Set([
+    adapter.documentIds.overview,
+    adapter.documentIds.assets,
+    adapter.documentIds.recurringFlows,
+    adapter.documentIds.monthly,
+  ])
+  const presentationUpdates = changedCalls.filter((call) => {
+    return call.endpoint === "documents.update" && presentationIds.has(call.payload.id)
   })
   assert.equal(rawUpdates.length, 1)
-  assert.equal(principleUpdates.length, 1)
-  assert.ok(fake.calls.indexOf(rawUpdates[0]) < fake.calls.indexOf(principleUpdates[0]))
+  assert.equal(presentationUpdates.length, 0)
   const rawDocument = fake.documents.get(adapter.documentIds.handoff)
-  const principleDocument = fake.documents.get(adapter.documentIds.principles)
   const overviewDocument = fake.documents.get(adapter.documentIds.overview)
   const assetsDocument = fake.documents.get(adapter.documentIds.assets)
   assert.match(rawDocument.text, /^```json\n/)
-  assert.match(principleDocument.text, /^# 개인화된 자산관리 원칙\n/)
   assert.match(overviewDocument.text, /\| 순자산 \| 1,000,000 KRW \|/)
   assert.match(assetsDocument.text, /\| 현금성 자산 \| 1,000,000 KRW \|/)
-  assert.match(principleDocument.text, /환불은 원거래 월의 지출을 조정해요/)
-  assert.doesNotMatch(principleDocument.text, /every\\_event|합성 가구 정보/)
   const assetsCreate = fake.calls.find((call) => {
     return call.endpoint === "documents.create" && call.payload.id === adapter.documentIds.assets
   })
@@ -697,21 +757,16 @@ test("handoff는 validation 후 고정 문서로 round trip하고 입력을 변�
   })
   assert.match(assetsCreate.payload.text, /\| 항목 \| 금액 \|\n\| --- \| --- \|/)
   assert.match(overviewCreate.payload.text, /## 자산 현황/)
-  for (const document of [
-    overviewDocument,
-    principleDocument,
-    assetsDocument,
-  ]) {
+  for (const document of [overviewDocument, assetsDocument]) {
     assert.equal(document.text, normalizeOutlineMarkdown(document.text))
     assert.doesNotMatch(document.text, /^- /m)
   }
-  assert.doesNotMatch(principleDocument.text, /```json|schema_version|합성 가구 정보|예시 계좌/)
   assert.doesNotMatch(overviewDocument.text, /```json|schema_version|합성 가구 정보|예시 계좌/)
   assert.match(assetsDocument.text, /예시 계좌/)
 
-  overviewDocument.text = overviewDocument.text.replace(/^\* /gm, "- ")
-  principleDocument.text = principleDocument.text
-    .replace("| 코드 | 원칙 | 적용 |", "|  코드 |원칙   | 적용|")
+  overviewDocument.text = overviewDocument.text
+    .replace(/^\* /gm, "- ")
+    .replace("| 유형 | 금액 | 상태 |", "|  유형 |금액   | 상태|")
     .replace("| --- | --- | --- |", "|--------|------|---|")
   assetsDocument.text = assetsDocument.text
     .replace("| 항목 | 금액 |", "|항목   |  금액|")
@@ -726,30 +781,28 @@ test("handoff는 validation 후 고정 문서로 round trip하고 입력을 변�
   assert.equal(fake.count("documents.update"), updatesBeforeMixedListRepair + 1)
   assert.doesNotMatch(overviewDocument.text, /^- /m)
 
-  principleDocument.text = principleDocument.text.replace("|--------|------|---|", "|:--------|------|---|")
+  overviewDocument.text = overviewDocument.text.replace("| --- | --- | --- |", "|:--------|------|---|")
   const updatesBeforeAlignmentRepair = fake.count("documents.update")
   await adapter.bootstrap()
   assert.equal(fake.count("documents.update"), updatesBeforeAlignmentRepair + 1)
-  assert.match(principleDocument.text, /\| --- \| --- \| --- \|/)
+  assert.match(overviewDocument.text, /\| --- \| --- \| --- \|/)
 
-  principleDocument.text = principleDocument.text.replace(
-    "| 코드 | 원칙 | 적용 |",
-    '|["코드","원칙","적용"]',
+  overviewDocument.text = overviewDocument.text.replace(
+    "| 유형 | 금액 | 상태 |",
+    '|["유형","금액","상태"]',
   )
   const updatesBeforeMalformedTableRepair = fake.count("documents.update")
   await adapter.bootstrap()
   assert.equal(fake.count("documents.update"), updatesBeforeMalformedTableRepair + 1)
-  assert.match(principleDocument.text, /\| 코드 \| 원칙 \| 적용 \|/)
+  assert.match(overviewDocument.text, /\| 유형 \| 금액 \| 상태 \|/)
 
-  overviewDocument.text = overviewDocument.text.replace("원본 replay 결과", "다른 결과")
+  overviewDocument.text = overviewDocument.text.replace("## 자산 현황", "## 다른 현황")
   assetsDocument.text = assetsDocument.text.replace("# 개인 자산 목록", "## 다른 자산 목록")
-  principleDocument.text = principleDocument.text.replace("P-04", "P-99")
   const updatesBeforeContentRepair = fake.count("documents.update")
   await adapter.bootstrap()
-  assert.equal(fake.count("documents.update"), updatesBeforeContentRepair + 3)
-  assert.match(overviewDocument.text, /원본 replay 결과/)
+  assert.equal(fake.count("documents.update"), updatesBeforeContentRepair + 2)
+  assert.match(overviewDocument.text, /## 자산 현황/)
   assert.match(assetsDocument.text, /^# 개인 자산 목록$/m)
-  assert.match(principleDocument.text, /P-04/)
 
   const invalid = structuredClone(handoff)
   delete invalid.profile.currency
@@ -771,7 +824,7 @@ test("handoff가 없으면 원장에 event를 commit하지 않는다", async () 
   assert.deepEqual(await adapter.readEvents(), [])
 })
 
-test("사람용 계층은 자산, 고정 흐름, 월별 발생 손익과 현금흐름을 원본 replay에서 만든다", async () => {
+test("사람용 계층은 자산, 고정 흐름, 월별 수입·지출과 현금흐름을 만든다", async () => {
   const { adapter, fake } = createAdapter()
   const handoff = validHandoff()
   handoff.budget_policy.protected_categories = ["의료"]
@@ -899,23 +952,25 @@ test("사람용 계층은 자산, 고정 흐름, 월별 발생 손익과 현금�
   assert.equal(january.parentDocumentId, year.id)
   assert.equal(february.parentDocumentId, year.id)
   assert.equal(march.parentDocumentId, year.id)
-  assert.match(fake.documents.get(ids.principles).text, /보호 지출: 의료/)
   assert.match(fake.documents.get(ids.assets).text, /예시 카드/)
   assert.match(fake.documents.get(ids.assets).text, /예시 할부/)
-  assert.match(fake.documents.get(ids.assets).text, /실제 잔액과 원장 계산값의 차이는 잔액 확인 기록이 추가된 뒤/)
+  assert.match(fake.documents.get(ids.assets).text, /\| 예시 할부 \| 130 KRW \| 100 KRW \| 0 KRW \| 20 KRW \|/)
   assert.match(fake.documents.get(ids.recurringFlows).text, /예시 월급/)
   assert.match(fake.documents.get(ids.recurringFlows).text, /예시 월세/)
-  assert.match(fake.documents.get(ids.recurringFlows).text, /부채 다음 상환액 \| 20 KRW/)
-  assert.match(fake.documents.get(ids.overview).text, /계산 기준 시각: 2099-02-02T09:00:00\+09:00/)
+  assert.match(fake.documents.get(ids.recurringFlows).text, /다음 할부 분할금 합계 \| 20 KRW/)
+  assert.match(fake.documents.get(ids.recurringFlows).text, /\| 예시 할부 \| 130 KRW \| 20 KRW \|/)
+  assert.match(fake.documents.get(ids.overview).text, /기준 시각: 2099-02-02T09:00:00\+09:00/)
   assert.match(fake.documents.get(ids.overview).text, /1건의 입력을 확인해야 해요/)
   assert.match(fake.documents.get(ids.overview).text, /예시 카드/)
   assert.match(fake.documents.get(ids.overview).text, /2099-02-10/)
 
   assert.match(january.text, /상태: 마감/)
   assert.match(january.text, /\| 발생 \| 수입 \| 300 KRW \|/)
-  assert.match(january.text, /\| 발생 \| 지출 \| 150 KRW \|/)
+  assert.match(january.text, /\| 발생 \| 지출 \| 100 KRW \|/)
   assert.match(january.text, /\| 현금 \| 유출 \| 120 KRW \|/)
   assert.match(january.text, /\| 현금 \| 부채 원금 상환 \| 20 KRW \|/)
+  assert.match(january.text, /할부 원금 등록/)
+  assert.match(january.text, /할부 분할금 납부 \| 할부 분할금/)
   assert.match(january.text, /7 포인트/)
   assert.doesNotMatch(january.text, /7 KRW/)
   assert.ok(january.text.indexOf("2099-01-16") < january.text.indexOf("2099-01-17"))
@@ -926,7 +981,7 @@ test("사람용 계층은 자산, 고정 흐름, 월별 발생 손익과 현금�
   assert.match(march.text, /상태: 예정/)
   assert.match(march.text, /현금·계좌 구매/)
   assert.match(year.text, /확정 누계 기준 월: 2099-01/)
-  assert.match(year.text, /\| 발생 지출 \| 150 KRW \|/)
+  assert.match(year.text, /\| 발생 지출 \| 100 KRW \|/)
 })
 
 test("읽기용 표 비교는 escaped pipe의 셀 경계를 보존한다", async () => {
@@ -1370,7 +1425,6 @@ test("steady-state round trip은 원본을 바꾸지 않고 index 순서로 읽�
   assert.deepEqual(await adapter.readEvents(), events)
   assert.deepEqual(await adapter.readNotifications(), notifications)
   assert.deepEqual(await adapter.readSnapshot(), snapshot)
-  assert.match(fake.documents.get(ids.principles).text, /^# 개인화된 자산관리 원칙\n/)
   assert.match(fake.documents.get(ids.assets).text, /^# 개인 자산 목록\n/)
   assert.match(fake.documents.get(ids.overview).text, /\| 순자산 \| 999,997 KRW \|/)
   assert.match(fake.documents.get(ids.assets).text, /\| 현금성 자산 \| 999,997 KRW \|/)
@@ -1382,7 +1436,6 @@ test("steady-state round trip은 원본을 바꾸지 않고 index 순서로 읽�
   assert.match(fake.documents.get(monthId).text, /\| 현금 \| 유출 \| 3 KRW \|/)
   assert.doesNotMatch(fake.documents.get(ids.overview).text, /지급 가능/)
   assert.doesNotMatch(fake.documents.get(ids.assets).text, /snapshot-only|event-first|event-second/)
-  assert.doesNotMatch(fake.documents.get(ids.principles).text, /```json/)
   assert.doesNotMatch(fake.documents.get(ids.assets).text, /```json/)
 })
 

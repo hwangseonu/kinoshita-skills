@@ -10,7 +10,7 @@
       "name": "personal-finance",
       "source": "./plugins/personal-finance",
       "description": "Personal finance onboarding and ongoing management workflows",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "author": {
         "name": "hwangseonu",
         "url": "https://github.com/hwangseonu"

@@ -9,7 +9,7 @@
       "name": "personal-finance",
       "display_name": "개인 재무 관리",
       "description": "초기 자산 온보딩부터 원장 기반 지속 관리까지 제공하는 스킬 모음",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "license": "Apache-2.0",
       "agents": [
         "claude",

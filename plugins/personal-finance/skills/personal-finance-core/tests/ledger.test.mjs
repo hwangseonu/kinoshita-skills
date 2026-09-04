@@ -639,7 +639,7 @@ test("포인트와 캐시백은 현금 중심 기본 정책을 따른다", () =>
   assert.equal(state.totals.other_income, 2_300)
 })
 
-test("할부 구매는 전체 지출과 원금을 동시에 만든다", () => {
+test("할부 구매는 원금만 등록하고 분할금 납부마다 원금을 줄인다", () => {
   const state = projectLedger(opening({
     liabilities: [{ liability_id: "installment", label: "할부", type: "installment", principal: 0 }],
   }), [
@@ -647,11 +647,43 @@ test("할부 구매는 전체 지출과 원금을 동시에 만든다", () => {
       liability_id: "installment",
       amount: 30_000,
     }, { settlement_status: "unsettled" }),
+    event("installment-payment", "debt_payment", {
+      liability_id: "installment",
+      position_id: "main-free",
+      principal: 10_000,
+    }, { settlement_status: "partially_settled" }),
+    event("installment-refund", "refund", {
+      amount: 5_000,
+      liability_id: "installment",
+      source_event_id: "installment-buy",
+    }, { recognition_status: "reversal" }),
   ])
 
-  assert.equal(state.liabilities.installment.principal, 30_000)
-  assert.equal(state.totals.expenses, 30_000)
-  assert.equal(state.positions["main-free"].amount, 100_000)
+  assert.equal(state.liabilities.installment.principal, 15_000)
+  assert.equal(state.totals.expenses, 0)
+  assert.equal(state.positions["main-free"].amount, 90_000)
+  assert.equal(state.expenses_by_period["2099-01"] ?? 0, 0)
+})
+
+test("카드와 할부 구매는 같은 유형의 부채만 늘린다", () => {
+  const initial = opening({
+    liabilities: [
+      { liability_id: "card", label: "카드", type: "credit_card", principal: 0 },
+      { liability_id: "installment", label: "할부", type: "installment", principal: 0 },
+    ],
+  })
+  assert.throws(() => projectLedger(initial, [
+    event("wrong-card", "card_purchase", {
+      amount: 10_000,
+      liability_id: "installment",
+    }, { settlement_status: "unsettled" }),
+  ]), /card purchase requires a credit card liability/)
+  assert.throws(() => projectLedger(initial, [
+    event("wrong-installment", "installment_purchase", {
+      amount: 10_000,
+      liability_id: "card",
+    }, { settlement_status: "unsettled" }),
+  ]), /installment purchase requires an installment liability/)
 })
 
 for (const liabilityType of ["installment", "revolving", "cash_advance", "card_loan"]) {

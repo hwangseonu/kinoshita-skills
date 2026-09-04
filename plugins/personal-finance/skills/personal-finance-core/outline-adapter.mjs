@@ -31,7 +31,7 @@ const EVENT_TYPE_LABELS = {
   fund_allocation: "목적 자금 배정",
   cash_purchase: "현금·계좌 구매",
   card_purchase: "카드 구매",
-  installment_purchase: "할부 구매",
+  installment_purchase: "할부 원금 등록",
   card_payment: "카드 결제",
   debt_draw: "대출 실행",
   liability_transfer: "부채 이동",
@@ -58,7 +58,7 @@ const EVENT_GROUP_LABELS = {
   fund_allocation: "자금 배정",
   cash_purchase: "소비",
   card_purchase: "소비",
-  installment_purchase: "소비",
+  installment_purchase: "할부 원금",
   card_payment: "카드 결제",
   debt_draw: "부채",
   liability_transfer: "부채",
@@ -110,10 +110,6 @@ const DOCUMENTS = {
   overview: {
     idKey: "view:root",
     title: "자산관리 시스템",
-  },
-  principles: {
-    idKey: "view:handoff",
-    title: "개인화된 자산관리 원칙",
   },
   assets: {
     idKey: "view:current-state",
@@ -584,21 +580,6 @@ function latestObservation(handoff) {
     .at(-1) ?? "기록 없음"
 }
 
-function principleRows(handoff) {
-  const protectedCategories = handoff.budget_policy.protected_categories
-  const refundPolicy = handoff.budget_policy.refund_period_policy === "source"
-    ? "환불은 원거래 월의 지출을 조정해요."
-    : "환불은 환불받은 월의 지출을 조정해요."
-  return [
-    ["P-01", protectedCategories.length > 0
-      ? `보호 지출: ${protectedCategories.join(", ")}`
-      : "보호 지출 분류가 아직 없어요.", "상시"],
-    ["P-02", "포인트는 현금화되기 전까지 참고 잔액으로 관리해요.", "상시"],
-    ["P-03", refundPolicy, "상시"],
-    ["P-04", `현금흐름 적자가 ${handoff.risk_rules.deficit_period_threshold}회 이어지면 위험을 확인해요.`, "상시"],
-  ]
-}
-
 function unresolvedPendingEvents(events, activeIds) {
   const resolved = new Set()
   for (const event of events) {
@@ -722,6 +703,9 @@ function eventReferences(handoff) {
     liabilities: new Map(
       handoff.liabilities.map((liability) => [liability.liability_id, liability.label]),
     ),
+    liabilityTypes: new Map(
+      handoff.liabilities.map((liability) => [liability.liability_id, liability.type]),
+    ),
     positions: new Map(
       handoff.opening_positions.map((position) => [position.position_id, accounts.get(position.account_id)]),
     ),
@@ -755,14 +739,26 @@ function eventStatus(event, activeIds) {
   }[event.settlement_status] ?? "반영 완료"
 }
 
-function eventDescription(event) {
+function eventDescription(event, references) {
   if ([
     "plan_created",
     "reservation_created",
     "conditional_commitment_created",
     "firm_commitment_created",
   ].includes(event.type)) return event.payload.label
+  if (event.type === "debt_payment"
+    && references.liabilityTypes.get(event.payload.liability_id) === "installment") {
+    return "할부 분할금 납부"
+  }
   return EVENT_TYPE_LABELS[event.type] ?? event.type
+}
+
+function eventGroupLabel(event, references) {
+  if (event.type === "debt_payment"
+    && references.liabilityTypes.get(event.payload.liability_id) === "installment") {
+    return "할부 분할금"
+  }
+  return EVENT_GROUP_LABELS[event.type] ?? "기타"
 }
 
 function monthStatus(periodId, currentPeriodId, lastClosedPeriodId) {
@@ -896,7 +892,9 @@ function scheduledItems(handoff, state, currentPeriodId) {
     push(
       liability.next_payment.due_at,
       liability.label,
-      liability.type === "credit_card" ? "카드 결제" : "부채 상환",
+      liability.type === "credit_card"
+        ? "카드 결제"
+        : liability.type === "installment" ? "할부 분할금" : "부채 상환",
       liability.next_payment.amount.amount,
       liability.payment_account_id,
       liability.overdue,
@@ -937,8 +935,6 @@ function emptyPresentation(title, message) {
     `# ${title}`,
     "",
     message,
-    "",
-    "> 이 문서는 읽기용이에요. 재생과 검증에는 기계 전용 원본 JSON을 사용해요.",
   ].join("\n")
 }
 
@@ -958,9 +954,7 @@ function renderOverview(presentation) {
   return [
     "# 자산관리 시스템",
     "",
-    "> 이 문서는 원본 replay 결과를 보여주는 읽기용 첫 화면이에요.",
-    "",
-    `* 계산 기준 시각: ${state.as_of}`,
+    `* 기준 시각: ${state.as_of}`,
     `* 마지막 인계 관측 시각: ${latestObservation(handoff)}`,
     "",
     "## 자산 현황",
@@ -970,23 +964,18 @@ function renderOverview(presentation) {
       ["일반 카드 결제 예정액", formatMoney(nextCardPayment, currency)],
       ["할부·대출 잔액", formatMoney(debtLiabilities.reduce((total, item) => total + liabilityAmount(item), 0), currency)],
       ["순자산", formatMoney(state.totals.net_worth, currency)],
-      ["전월 말 대비 순자산 변화", "월말 관측 기록 없음"],
     ], "표시할 자산 합계가 없어요."),
     "",
     renderTable(["유형", "금액", "상태"], [
-      ["현금성 자산", formatMoney(state.totals.cash_like, currency), "원장 계산값"],
-      ["비현금성 자산", formatMoney(state.totals.total_assets - state.totals.cash_like, currency), "원장 계산값"],
-      ["일반 카드", formatMoney(cardLiabilities.reduce((total, item) => total + liabilityAmount(item), 0), currency), "원장 계산값"],
-      ["할부·기타 부채", formatMoney(debtLiabilities.reduce((total, item) => total + liabilityAmount(item), 0), currency), "원장 계산값"],
+      ["현금성 자산", formatMoney(state.totals.cash_like, currency), "기록상"],
+      ["비현금성 자산", formatMoney(state.totals.total_assets - state.totals.cash_like, currency), "기록상"],
+      ["일반 카드", formatMoney(cardLiabilities.reduce((total, item) => total + liabilityAmount(item), 0), currency), "기록상"],
+      ["할부·기타 부채", formatMoney(debtLiabilities.reduce((total, item) => total + liabilityAmount(item), 0), currency), "기록상"],
     ], "표시할 유형별 합계가 없어요."),
     "",
     "## 확인이 필요한 항목",
     "",
     renderTable(["항목", "확인 이유", "중요도", "기한"], attention, "지금 확인이 필요한 항목이 없어요."),
-    "",
-    "## 현재 적용 중인 핵심 원칙",
-    "",
-    renderTable(["코드", "원칙", "적용"], principleRows(handoff), "기록된 원칙이 없어요."),
     "",
     "## 이번 달 수입·지출",
     "",
@@ -994,11 +983,9 @@ function renderOverview(presentation) {
       ? renderTable(["항목", "금액"], [
         ["발생 수입", formatMoney(currentMonth.income, currency)],
         ["발생 지출", formatMoney(currentMonth.expense, currency)],
-        ["예산 사용률", "분류별 예산 기록 없음"],
         ["순현금 변화", formatSignedMoney(currentMonth.cashIn - currentMonth.cashOut, currency)],
-        ["고정 항목 처리 상태", "예정·실제 연결 기록 없음"],
       ], "이번 달 합계가 없어요.")
-      : "이번 달로 계산할 기록이 없어요.",
+      : "이번 달 기록이 없어요.",
     "",
     "## 이번 달 남은 고정 일정",
     "",
@@ -1008,61 +995,11 @@ function renderOverview(presentation) {
       "이번 달에 구조화된 일정이 없어요.",
     ),
     "",
-    "반복 흐름의 자유 형식 일정은 날짜로 추정하지 않아요. 처리 상태는 원본 거래와 연결 정보가 생긴 뒤 자동으로 판단할 수 있어요.",
-    "",
     "## 상세 문서",
     "",
-    "* `개인화된 자산관리 원칙`",
     "* `개인 자산 목록`",
     "* `고정 수입·지출`",
     "* `월별 수입·지출`",
-    "* `원본 JSON (기계 전용)`",
-  ].join("\n")
-}
-
-function renderPrinciples(presentation) {
-  if (presentation === null) {
-    return emptyPresentation("개인화된 자산관리 원칙", "저장된 인계 데이터가 없어요.")
-  }
-  const { handoff } = presentation
-  return [
-    "# 개인화된 자산관리 원칙",
-    "",
-    "> 원칙 변경은 사용자 승인을 받은 뒤 인계 데이터에 반영해요.",
-    "",
-    `* 기준 시각: ${handoff.snapshot.as_of}`,
-    "",
-    "## 상시 원칙",
-    "",
-    renderTable(["코드", "원칙", "적용"], principleRows(handoff), "기록된 상시 원칙이 없어요."),
-    "",
-    "## 임시 원칙",
-    "",
-    "구조화된 임시 원칙이 아직 없어요.",
-    "",
-    "## 상세 해설",
-    "",
-    "### P-01 보호 지출",
-    "",
-    "보호 지출은 일반 예산 감축 대상으로 자동 분류하지 않아요.",
-    "",
-    "### P-02 포인트",
-    "",
-    "포인트 적립과 사용은 참고 잔액으로 관리하고, 현금화되거나 계좌로 입금될 때 기타수입으로 반영해요.",
-    "",
-    "### P-03 환불",
-    "",
-    handoff.budget_policy.refund_period_policy === "source"
-      ? "환불액은 원거래가 발생한 월의 지출에서 차감해요."
-      : "환불액은 환불받은 월의 지출에서 차감해요.",
-    "",
-    "### P-04 현금흐름 위험",
-    "",
-    `현금흐름 적자가 ${handoff.risk_rules.deficit_period_threshold}회 이어지면 제한 지원 조건을 확인해요.`,
-    "",
-    "## 변경 기록",
-    "",
-    "현재 schema는 원칙 변경 이력을 별도로 저장하지 않아요.",
   ].join("\n")
 }
 
@@ -1114,13 +1051,26 @@ function renderAssets(presentation) {
         accountLabels.get(liability.payment_account_id) ?? "기록 없음",
       ]
     })
-  const liabilityHeaders = ["항목", "유형", "현재 원장 계산값", "인계 시 관측값", "인계 후 원장 변동", "관측 시각", "다음 납부", "결제 계좌"]
+  const installmentRows = handoff.liabilities
+    .filter((liability) => liability.type === "installment")
+    .map((liability) => {
+      const current = state.liabilities[liability.liability_id]
+      return [
+        liability.label,
+        formatMoney(current.principal, currency),
+        formatMoney(liability.principal.amount, currency),
+        formatMoney(current.accrued_interest + current.fees_due, currency),
+        formatMoney(liability.next_payment.amount.amount, currency),
+        formatDate(liability.next_payment.due_at, handoff.profile.timezone),
+        liability.remaining_installments == null ? "기록 없음" : String(liability.remaining_installments),
+        accountLabels.get(liability.payment_account_id) ?? "기록 없음",
+      ]
+    })
+  const liabilityHeaders = ["항목", "유형", "기록상 금액", "인계 시 금액", "인계 후 변동", "관측 시각", "다음 납부", "결제 계좌"]
   return [
     "# 개인 자산 목록",
     "",
-    "> 현재 금액은 원본 replay 결과예요. 인계 시 관측값은 현재 실제 잔액으로 간주하지 않아요.",
-    "",
-    `* 원장 계산 기준 시각: ${state.as_of}`,
+    `* 기준 시각: ${state.as_of}`,
     `* 마지막 인계 관측 시각: ${latestObservation(handoff)}`,
     "",
     "## 전체 요약",
@@ -1135,7 +1085,7 @@ function renderAssets(presentation) {
     "## 등록된 통장과 계좌",
     "",
     renderTable(
-      ["계좌", "자산 성격", "유동성", "현재 원장 계산값", "인계 시 관측값", "인계 후 원장 변동", "관측 시각", "다음 확인"],
+      ["계좌", "자산 성격", "유동성", "기록상 금액", "인계 시 금액", "인계 후 변동", "관측 시각", "다음 확인"],
       accountRows,
       "등록된 계좌가 없어요.",
     ),
@@ -1146,7 +1096,11 @@ function renderAssets(presentation) {
     "",
     "## 할부",
     "",
-    renderTable(liabilityHeaders, liabilityRows(new Set(["installment"])), "등록된 할부가 없어요."),
+    renderTable(
+      ["할부", "기록상 남은 원금", "인계 시 원금", "미지급 이자·수수료", "다음 분할금", "다음 납부일", "남은 회차", "결제 계좌"],
+      installmentRows,
+      "등록된 할부가 없어요.",
+    ),
     "",
     "## 기타 부채",
     "",
@@ -1159,12 +1113,6 @@ function renderAssets(presentation) {
     "## 확인이 필요한 항목",
     "",
     renderTable(["항목", "확인 이유", "중요도", "기한"], attention, "지금 확인이 필요한 항목이 없어요."),
-    "",
-    "## 미사용·확인 필요",
-    "",
-    "현재 schema에는 계좌와 카드의 사용 상태가 없어서 자동으로 미사용 항목을 분류하지 않아요.",
-    "",
-    "실제 잔액과 원장 계산값의 차이는 잔액 확인 기록이 추가된 뒤 표시할 수 있어요.",
   ].join("\n")
 }
 
@@ -1172,8 +1120,9 @@ function renderRecurringFlows(presentation) {
   if (presentation === null) {
     return emptyPresentation("고정 수입·지출", "저장된 인계 데이터가 없어요.")
   }
-  const { handoff } = presentation
+  const { handoff, state } = presentation
   const currency = handoff.profile.currency
+  const accountLabels = new Map(handoff.accounts.map((account) => [account.account_id, account.label]))
   const flowRows = (direction) => handoff.recurring_flows
     .filter((flow) => flow.direction === direction)
     .map((flow) => [
@@ -1185,8 +1134,20 @@ function renderRecurringFlows(presentation) {
       flow.amount.next_review_at ?? "해당 없음",
       flow.essential === true ? "필수" : flow.essential === false ? "일반" : "기록 없음",
     ])
+  const installmentRows = handoff.liabilities
+    .filter((liability) => liability.type === "installment")
+    .map((liability) => [
+      liability.label,
+      formatMoney(state.liabilities[liability.liability_id].principal, currency),
+      formatMoney(liability.next_payment.amount.amount, currency),
+      formatDate(liability.next_payment.due_at, handoff.profile.timezone),
+      liability.remaining_installments == null ? "기록 없음" : String(liability.remaining_installments),
+      accountLabels.get(liability.payment_account_id) ?? "기록 없음",
+    ])
   const debtRows = handoff.liabilities
-    .filter((liability) => liability.type !== "credit_card" && liability.next_payment)
+    .filter((liability) => liability.type !== "credit_card"
+      && liability.type !== "installment"
+      && liability.next_payment)
     .map((liability) => [
       liability.label,
       LIABILITY_TYPE_LABELS[liability.type] ?? liability.type,
@@ -1201,26 +1162,25 @@ function renderRecurringFlows(presentation) {
   const expenseTotal = measuredTotal(
     handoff.recurring_flows.filter((flow) => flow.direction === "expense").map((flow) => flow.amount),
   )
-  const debtPaymentTotal = handoff.liabilities
-    .filter((liability) => liability.type !== "credit_card")
+  const installmentPaymentTotal = handoff.liabilities
+    .filter((liability) => liability.type === "installment")
+    .reduce((total, liability) => total + liability.next_payment.amount.amount, 0)
+  const otherDebtPaymentTotal = handoff.liabilities
+    .filter((liability) => liability.type !== "credit_card" && liability.type !== "installment")
     .reduce((total, liability) => total + (liability.next_payment?.amount.amount ?? 0), 0)
   return [
     "# 고정 수입·지출",
     "",
-    "> 반복 조건의 기준표예요. 실제 수령과 결제 여부는 월별 문서에서 확인해요.",
-    "",
-    `* 기준 시각: ${handoff.snapshot.as_of}`,
+    `* 기준 시각: ${state.as_of}`,
     "",
     "## 등록 금액 요약",
     "",
     renderTable(["항목", "금액"], [
       ["고정 수입 등록 금액", formatMoney(incomeTotal, currency)],
-      ["반복 지출 등록 금액", formatMoney(expenseTotal, currency)],
-      ["부채 다음 상환액", formatMoney(debtPaymentTotal, currency)],
-      ["전체 고정 현금 유출", "중복 확인 전 계산 보류"],
+      ["생활·서비스 반복 지출 등록 금액", formatMoney(expenseTotal, currency)],
+      ["다음 할부 분할금 합계", formatMoney(installmentPaymentTotal, currency)],
+      ["기타 부채 다음 상환액", formatMoney(otherDebtPaymentTotal, currency)],
     ], "표시할 등록 금액이 없어요."),
-    "",
-    "자유 형식 일정은 월 단위 금액으로 환산하지 않아요. 반복 지출과 부채 상환을 연결할 정보가 없어 전체 현금 유출도 합산하지 않아요.",
     "",
     "## 고정 수입",
     "",
@@ -1232,29 +1192,27 @@ function renderRecurringFlows(presentation) {
     "",
     "## 생활·서비스 고정비",
     "",
-    "현재 schema는 반복 지출의 세부 유형을 구분하지 않아서 등록된 지출을 이 구역의 후보로 보여줘요.",
-    "",
     renderTable(
       ["항목", "금액", "금액 성격", "일정", "관측 시각", "다음 확인", "필수 여부"],
       flowRows("expense"),
       "등록된 반복 지출이 없어요.",
     ),
     "",
-    "## 부채 상환",
+    "## 할부 고정비",
+    "",
+    renderTable(
+      ["할부", "남은 상환 원금", "다음 분할금", "다음 납부일", "남은 회차", "결제 계좌"],
+      installmentRows,
+      "등록된 할부가 없어요.",
+    ),
+    "",
+    "## 기타 부채 상환",
     "",
     renderTable(
       ["부채", "유형", "다음 납부액", "다음 납부일", "남은 회차", "연이율"],
       debtRows,
-      "등록된 부채 상환 일정이 없어요.",
+      "등록된 기타 부채 상환 일정이 없어요.",
     ),
-    "",
-    "## 이번 달 예정표",
-    "",
-    "구조화된 반복 규칙과 실제 거래 연결 정보가 없어 반복 항목의 월별 예정·실제를 자동으로 만들지 않아요.",
-    "",
-    "## 확인이 필요한 항목",
-    "",
-    "금액 범위, 결제 수단, 적용 기간과 실제 거래 연결은 다음 schema에서 구조화해야 해요.",
   ].join("\n")
 }
 
@@ -1266,9 +1224,7 @@ function renderMonthlyRoot(presentation) {
   return [
     "# 월별 수입·지출",
     "",
-    "> 연도 문서 아래에서 월별 수입·지출과 현금흐름을 확인할 수 있어요.",
-    "",
-    `* 계산 기준 시각: ${presentation.state.as_of}`,
+    `* 기준 시각: ${presentation.state.as_of}`,
     `* 현재 월: ${presentation.monthly.currentPeriodId
       ? periodTitle(presentation.monthly.currentPeriodId)
       : "기록 없음"}`,
@@ -1292,8 +1248,6 @@ function renderYear(presentation, year) {
   return [
     `# ${year}년 수입·지출`,
     "",
-    "> 마감된 달의 누계와 진행 중인 달을 분리해 보여줘요.",
-    "",
     `* 확정 누계 기준 월: ${closed.at(-1)?.periodId ?? "기록 없음"}`,
     "",
     "## 마감된 달 누계",
@@ -1304,7 +1258,6 @@ function renderYear(presentation, year) {
         ["발생 지출", formatMoney(closed.reduce((total, month) => total + month.expense, 0), currency)],
         ["수입·지출 차액", formatSignedMoney(closed.reduce((total, month) => total + month.income - month.expense, 0), currency)],
         ["현금 증감", formatSignedMoney(closed.reduce((total, month) => total + month.cashIn - month.cashOut, 0), currency)],
-        ["연초 대비 순자산 변화", "월말 관측 기록 없음"],
       ], "마감된 달이 없어요.")
       : "마감된 달이 없어요.",
     "",
@@ -1315,7 +1268,6 @@ function renderYear(presentation, year) {
         ["현재 월", periodTitle(current.periodId)],
         ["발생 수입", formatMoney(current.income, currency)],
         ["발생 지출", formatMoney(current.expense, currency)],
-        ["예산 사용률", "분류별 예산 기록 없음"],
         ["현금 증감", formatSignedMoney(current.cashIn - current.cashOut, currency)],
       ], "진행 중인 달이 없어요.")
       : "진행 중인 달이 없어요.",
@@ -1334,14 +1286,6 @@ function renderYear(presentation, year) {
       ]),
       "표시할 월이 없어요.",
     ),
-    "",
-    "## 분류별 연간 지출",
-    "",
-    "거래 분류와 월별 예산이 구조화되어 있지 않아 아직 집계하지 않아요.",
-    "",
-    "## 자산 변화",
-    "",
-    "월말 실제 잔액 관측 기록이 없어 과거 순자산을 추정하지 않아요.",
   ].join("\n")
 }
 
@@ -1353,8 +1297,8 @@ function renderMonth(presentation, month) {
   const transactionRows = month.confirmedTransactions.map((event) => {
     return [
       formatDate(event.occurred_at, timeZone),
-      eventDescription(event),
-      EVENT_GROUP_LABELS[event.type] ?? "기타",
+      eventDescription(event, references),
+      eventGroupLabel(event, references),
       "분류 미기록",
       eventMethod(event, references),
       formatEventAmount(event, currency),
@@ -1363,17 +1307,14 @@ function renderMonth(presentation, month) {
   })
   const pendingRows = month.pendingTransactions.map((event) => [
     formatDate(event.occurred_at, timeZone),
-    eventDescription(event),
-    EVENT_GROUP_LABELS[event.type] ?? "기타",
+    eventDescription(event, references),
+    eventGroupLabel(event, references),
     formatEventAmount(event, currency),
   ])
   return [
     `# ${periodTitle(month.periodId)} 수입·지출`,
     "",
-    "> 발생 기준 수입·지출과 실제 현금흐름을 분리해 보여줘요.",
-    "",
     `* 상태: ${month.status}`,
-    `* 마감 시각: ${month.status === "마감" ? "별도 기록 없음" : "해당 없음"}`,
     "",
     "## 한눈에 보기",
     "",
@@ -1392,38 +1333,22 @@ function renderMonth(presentation, month) {
     renderTable(
       ["발생일", "항목", "구분", "금액"],
       pendingRows,
-      "확인 전 거래가 없어요. 고정 항목 처리와 예산 초과는 연결 정보가 생긴 뒤 판단할 수 있어요.",
+      "확인 전 거래가 없어요.",
     ),
-    "",
-    "## 고정 수입·지출 예정과 실제",
-    "",
-    "반복 항목과 실제 거래의 연결 정보가 없어 자동으로 비교하지 않아요.",
     "",
     "## 분류별 지출",
     "",
-    renderTable(["분류", "예산", "실제 지출", "남은 금액", "사용률"], [
-      ["미분류", "기록 없음", formatMoney(month.expense, currency), "기록 없음", "기록 없음"],
+    renderTable(["분류", "지출"], [
+      ["미분류", formatMoney(month.expense, currency)],
     ], "표시할 지출이 없어요."),
     "",
-    "## 전체 거래 내역",
+    "## 전체 거래 내역 (소비 외 포함)",
     "",
     renderTable(
       ["발생일", "내용", "거래 유형", "분류", "결제·입금 수단", "금액", "상태"],
       transactionRows,
       "확정 거래가 없어요.",
     ),
-    "",
-    "같은 시각의 거래는 원본 이벤트 index 순서로 표시해요. 원본 event ID는 사람용 문서에 노출하지 않아요.",
-    "",
-    "## 월 마감",
-    "",
-    isMonthlyPeriodId(handoff.operations.last_closed_period_id)
-      ? `마지막 월 마감 포인터는 ${handoff.operations.last_closed_period_id}예요.`
-      : "월 마감 시각과 당시 수치는 구조화되어 있지 않아요.",
-    "",
-    "## 마감 후 정정",
-    "",
-    "현재 수치는 취소·대체·환불을 모두 replay한 결과예요. 마감 시각이 없어 마감 후에 들어온 정정만 따로 판별하지 않아요.",
   ].join("\n")
 }
 
@@ -1732,6 +1657,46 @@ export class OutlineAssetAdapter {
     return this.#responseDocument(response, "documents.update")
   }
 
+  async #archiveRetiredPrinciples() {
+    const id = this.#documentId("view:handoff")
+    const existing = await this.#getDocument(id)
+    if (!existing || existing.archivedAt != null) return
+    this.#validateLocation(existing, { id, parentDocumentId: this.#ids.overview })
+    if (existing.title !== "개인화된 자산관리 원칙") {
+      throw new Error("Outline retired presentation document conflict: view:handoff")
+    }
+    if (await this.#hasActiveChildDocuments(id)) {
+      throw new Error("Outline retired presentation document has active child documents: view:handoff")
+    }
+    try {
+      await this.#request("documents.archive", { id })
+    } catch (error) {
+      const reconciled = await this.#getDocument(id)
+      if (reconciled?.archivedAt != null) return
+      throw error
+    }
+    const archived = await this.#getDocument(id)
+    if (!archived || archived.archivedAt == null) {
+      throw new Error("Outline retired presentation document was not archived: view:handoff")
+    }
+  }
+
+  async #hasActiveChildDocuments(parentDocumentId) {
+    const response = await this.#request("documents.list", {
+      collectionId: this.#collectionId,
+      direction: "ASC",
+      limit: 1,
+      offset: 0,
+      parentDocumentId,
+      sort: "createdAt",
+      statusFilter: ["published", "draft"],
+    })
+    if (!Array.isArray(response.data) || response.data.length > 1) {
+      throw new Error("Outline documents.list response does not contain a valid document array")
+    }
+    return response.data.length > 0
+  }
+
   #responseDocument(response, endpoint) {
     if (!response?.data || typeof response.data !== "object" || Array.isArray(response.data)) {
       throw new Error(`Outline ${endpoint} response does not contain document data`)
@@ -1986,9 +1951,7 @@ export class OutlineAssetAdapter {
     await this.#ensurePresentationDocument(
       this.#presentationSpec("overview", renderOverview(presentation), null),
     )
-    await this.#ensurePresentationDocument(
-      this.#presentationSpec("principles", renderPrinciples(presentation)),
-    )
+    await this.#archiveRetiredPrinciples()
     await this.#ensurePresentationDocument(
       this.#presentationSpec("assets", renderAssets(presentation)),
     )
